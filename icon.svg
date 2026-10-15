@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" aria-hidden="true">
+  <title>Token usage breakdown</title>
+  <g stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 7.5 12 3.5l8 4-8 4-8-4Z" />
+    <path d="M4 12.2l8 4 8-4" />
+    <path d="M4 16.6l8 4 8-4" />
+  </g>
+  <g fill="currentColor">
+    <circle cx="12" cy="7.6" r="1.5" />
+    <circle cx="12" cy="12.2" r="1.5" />
+    <circle cx="12" cy="16.7" r="1.5" />
+  </g>
+</svg>

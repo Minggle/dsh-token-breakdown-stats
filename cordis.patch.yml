@@ -1,0 +1,9 @@
+# Bundle patch for @local/token-breakdown-stats.
+#
+# The row id is ours; the package resolves from this workspace bundle. The
+# Client half replaces the shipped `conversation.composer.dock` `stats` entry
+# (same id, same order), so the shipped pill is displaced rather than
+# duplicated.
+- insert:
+    - id: token-breakdown-stats
+      name: '@local/token-breakdown-stats'

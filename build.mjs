@@ -1,0 +1,176 @@
+// Build bundle/client.js from bundle/src/*.js into ONE self-contained browser
+// module: the DSH web client loads a single artifact per plugin, so relative
+// imports must be resolved at build time.
+//
+// Source style supported by the transform:
+//   ESM:   import { a, b as c } from './x.js'   |   import def from 'react'
+//          export function name / export const name / export { a, b } / export default expr
+//   CJS:   module.exports = { ... }   |   const x = __require('./y.js')
+// A file without ESM syntax is inlined verbatim (it already speaks the
+// wrapper's `module` / `exports` / `__require` dialect).
+//
+// `__require` resolves './…' against this bundle and delegates every other
+// name (for example 'react') to the browser module table.
+//
+// Usage: node build.mjs   (run from the bundle directory)
+
+import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const SRC = join(HERE, 'src')
+const LOCALE_DIR = join(HERE, 'locale')
+const OUT = join(HERE, 'client.js')
+const MODULE_ID = '@local/token-breakdown-stats'
+const ENTRY = './entry.js'
+const LOCALE_MODULE = './__locale.js'
+
+const ESM_HINT = /^\s*(import|export)\s/m
+
+/**
+ * Rewrite one ESM source file into the wrapper dialect.
+ * @param source - file text.
+ * @param name - module name used in headers.
+ * @returns the rewritten text.
+ */
+function transformEsm(source, name) {
+  const exported = []
+  let body = source
+
+  body = body.replace(
+    /^import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"];?\s*$/gm,
+    (_match, names, from) => {
+      const bindings = names
+        .split(',')
+        .map(part => part.trim())
+        .filter(Boolean)
+        .map(part => {
+          const pieces = part.split(/\s+as\s+/).map(s => s.trim())
+          return pieces.length === 2 ? `${pieces[0]}: ${pieces[1]}` : pieces[0]
+        })
+        .join(', ')
+      return `const { ${bindings} } = __require('${from}');`
+    },
+  )
+
+  body = body.replace(
+    /^import\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"];?\s*$/gm,
+    (_match, local, from) => `const ${local} = __require('${from}');`,
+  )
+
+  body = body.replace(/^export\s*\{([^}]*)\};?\s*$/gm, (_match, names) => {
+    for (const part of names.split(',').map(s => s.trim()).filter(Boolean)) {
+      const pieces = part.split(/\s+as\s+/).map(s => s.trim())
+      const local = pieces[0]
+      const exportedName = pieces.length === 2 ? pieces[1] : local
+      exported.push([local, exportedName])
+    }
+    return ''
+  })
+
+  body = body.replace(/^export\s+default\s+/gm, () => {
+    exported.push(['__default__', 'default'])
+    return 'const __default__ = '
+  })
+
+  body = body.replace(
+    /^export\s+(async\s+function|function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm,
+    (_match, kind, name2) => {
+      exported.push([name2, name2])
+      return `${kind} ${name2}`
+    },
+  )
+
+  const assignments = exported.map(([local, key]) => `  ${JSON.stringify(key)}: ${local},`).join('\n')
+  const header = `// ${name} (inlined by build.mjs — edit src/${name.replace('./', '')} instead)\n`
+  return `${header}${body}\nmodule.exports = {\n${assignments}\n};\n`
+}
+
+/**
+ * Read one source module, transforming it only when it uses ESM syntax.
+ * @param name - './x.js'.
+ * @param source - file text.
+ * @returns wrapper-dialect text.
+ */
+function prepare(name, source) {
+  return ESM_HINT.test(source) ? transformEsm(source, name) : source
+}
+
+function localeModule() {
+  if (!existsSync(LOCALE_DIR)) return null
+  const payload = {}
+  for (const file of readdirSync(LOCALE_DIR).filter(name => name.endsWith('.json')).sort()) {
+    payload[file.replace(/\.json$/, '')] = JSON.parse(readFileSync(join(LOCALE_DIR, file), 'utf8'))
+  }
+  if (Object.keys(payload).length === 0) return null
+  return {
+    name: LOCALE_MODULE,
+    source: `// Generated from locale/*.json by build.mjs — do not edit.\nmodule.exports = ${JSON.stringify(payload, null, 2)};\n`,
+  }
+}
+
+function build() {
+  const srcNames = readdirSync(SRC)
+    .filter(name => (name.endsWith('.js') || name.endsWith('.cjs')) && !name.includes('.test.'))
+    .sort()
+    .map(name => `./${name}`)
+
+  const generated = localeModule()
+  const names = [...srcNames, ...(generated === null ? [] : [generated.name])]
+  if (!names.includes(ENTRY)) throw new Error(`missing entry module ${ENTRY} in src/`)
+
+  const defs = names.map(name => {
+    const source = generated !== null && name === generated.name
+      ? generated.source
+      : readFileSync(join(SRC, name.replace('./', '')), 'utf8')
+    return { name, source: prepare(name, source) }
+  })
+
+  const defsLiteral = defs
+    .map(({ name, source }) => `  ${JSON.stringify(name)}: function (module, exports, __require) {\n${source}\n  },`)
+    .join('\n')
+
+  const artifact = `// Generated by build.mjs — do not edit.
+// ${MODULE_ID}: session token usage with subagent rollup.
+window.__ModuleLoader__.load({
+  id: ${JSON.stringify(MODULE_ID)},
+  factory(require) {
+    // Any throw here surfaces in the web boot as "<entry>: failed" with no
+    // cause, so the real error is logged before it propagates.
+    try {
+      const __cache = {};
+      const __defs = {
+${defsLiteral}
+      };
+      // './x.js' resolves inside this bundle; every other name (for example
+      // 'react') falls through to the browser module table.
+      function __require(name) {
+        if (name.charCodeAt(0) === 46) {
+          const cached = __cache[name];
+          if (cached !== undefined) return cached.exports;
+          const module = { exports: {} };
+          __cache[name] = module;
+          const def = __defs[name];
+          if (def === undefined) throw new Error('unknown local module: ' + name);
+          def(module, module.exports, __require);
+          return module.exports;
+        }
+        return require(name);
+      }
+      return __require(${JSON.stringify(ENTRY)});
+    } catch (error) {
+      console.error('[token-breakdown-stats] client module failed:', error);
+      throw error;
+    }
+  },
+});
+`
+
+  writeFileSync(OUT, artifact)
+  console.log(`built ${OUT}`)
+  console.log(`modules: ${names.join(', ')}`)
+  console.log(`bytes: ${artifact.length}`)
+}
+
+build()

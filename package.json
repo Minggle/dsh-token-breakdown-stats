@@ -1,0 +1,53 @@
+{
+  "name": "@local/token-breakdown-stats",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Session token usage with subagent rollup: replaces the composer-dock stats pill so the bottom total covers the main agent plus every subagent it called, and the click-open dialog itemizes usage by bucket, by subagent, and by model.",
+  "license": "MIT",
+  "icon": "./icon.svg",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "token-usage",
+    "subagent",
+    "statistics"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Minggle/dsh-token-breakdown-stats.git"
+  },
+  "homepage": "https://github.com/Minggle/dsh-token-breakdown-stats#readme",
+  "bugs": "https://github.com/Minggle/dsh-token-breakdown-stats/issues",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
