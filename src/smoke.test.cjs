@@ -462,17 +462,25 @@ const aggregator = require('./token-aggregator.cjs')
  * 2 + 3. Render the dock row and open the dialog.
  * ------------------------------------------------------------------ */
 
-// The entry module re-exports the component through its registration only, so
-// reach it through the slot registration the same way the dock does.
-let registered = null
+// The entry module re-exports the components through its registrations only,
+// so reach them through the slot registration the same way the dock does.
+let registeredCells = []
 
 /**
  * A faithful stand-in for the slot service's list-cell rule: a second
  * registration that reuses an id at the SAME priority throws, because the
- * shipped `ui-chat` row already occupies that cell. A permissive mock here is
+ * shipped `ui-chat` rows already occupy those cells. A permissive mock here is
  * what let that collision reach a real boot and take ui-chat down with it.
+ *
+ * The shipped rows mirror DSH `0.2.1-rc.2`, which split the old single `stats`
+ * cell into `activity` (order 0) and `usage` (order 1) at the default priority
+ * 0. The old single-`stats` dock is what made the plugin ADD a third control
+ * instead of replacing, so the fixture models the split dock on purpose.
  */
-const slotCells = [{ id: 'stats', priority: 0, registrant: 'ui-chat' }]
+const slotCells = [
+  { id: 'activity', priority: 0, registrant: 'ui-chat' },
+  { id: 'usage', priority: 0, registrant: 'ui-chat' },
+]
 const slots = {
   register: (options, component) => {
     const priority = options.priority ?? 0
@@ -483,10 +491,19 @@ const slots = {
       }
       slotCells.push({ id: options.id, priority, registrant: 'token-breakdown-stats' })
     }
-    registered = { options, component }
+    registeredCells.push({ options, component })
     return component
   },
-  inject: (_slot, callback) => callback(),
+  // `slots.inject` accepts a generator yielding one disposer per registration,
+  // exactly as the shipped `ui-chat` row registers its two cells.
+  inject: (_slot, callback) => {
+    const output = callback()
+    if (output !== null && typeof output === 'object' && typeof output.next === 'function') {
+      for (let step = output.next(); step.done !== true; step = output.next()) { /* drain */ }
+      return () => {}
+    }
+    return output
+  },
 }
 const locale = {
   register: () => () => {},
@@ -528,13 +545,25 @@ const ctx = restrictedCtx({
 })
 mod.apply(ctx)
 
-assert.ok(registered !== null, 'the plugin must register a dock cell')
-assert.strictEqual(registered.options.name, 'conversation.composer.dock')
-assert.strictEqual(registered.options.id, 'stats', 'must displace the shipped stats cell')
-assert.strictEqual(registered.options.order, 0)
+assert.strictEqual(registeredCells.length, 2, 'the plugin must register BOTH shipped statistics cells')
+const [activityCell, usageCell] = registeredCells
+assert.strictEqual(activityCell.options.name, 'conversation.composer.dock')
+assert.strictEqual(usageCell.options.name, 'conversation.composer.dock')
+assert.strictEqual(activityCell.options.id, 'activity', 'must displace the shipped activity cell')
+assert.strictEqual(usageCell.options.id, 'usage', 'must displace the shipped usage cell')
+assert.strictEqual(activityCell.options.order, 0, 'activity cell keeps the shipped order')
+assert.strictEqual(usageCell.options.order, 1, 'usage cell keeps the shipped order')
+for (const cell of registeredCells) {
+  assert.ok(
+    typeof cell.options.priority === 'number' && cell.options.priority < 0,
+    `cell "${cell.options.id}" must sit below the shipped priority 0 to shadow it, got ${String(cell.options.priority)}`,
+  )
+}
+// The old single-cell id must be gone: registering `stats` on the split dock is
+// what ADDED a third control instead of replacing one.
 assert.ok(
-  typeof registered.options.priority === 'number' && registered.options.priority < 0,
-  `must sit below the shipped priority 0 to shadow it, got ${String(registered.options.priority)}`,
+  !registeredCells.some(cell => cell.options.id === 'stats'),
+  'the obsolete single `stats` cell must no longer be registered',
 )
 
 const chatSnapshot = {
@@ -553,7 +582,7 @@ const dockProps = {
   t: translate(zh),
 }
 
-let tree = rerender(createElement(registered.component, dockProps))
+let tree = rerender(createElement(activityCell.component, dockProps))
 
 function collect(node, predicate, out = []) {
   if (node === null || typeof node !== 'object') return out
@@ -571,10 +600,21 @@ function textOf(node) {
   return ''
 }
 
+// Each cell renders exactly ONE control: the activity cell the time pill, the
+// usage cell the usage pill. Rendering both from both cells is the duplicate
+// this split exists to prevent.
+const activityButtons = collect(tree, node => node.type === 'button' && node.props['aria-haspopup'] === 'dialog')
+assert.strictEqual(activityButtons.length, 1, 'the activity cell renders exactly one dialog pill')
+assert.ok(textOf(tree).includes('轮'), 'the activity cell shows the turn/step counts')
+assert.ok(!textOf(tree).includes('94.3K'), 'the activity cell must not render the usage total')
+
+let usageTree = rerender(createElement(usageCell.component, dockProps))
+const usageButtons = collect(usageTree, node => node.type === 'button' && node.props['aria-haspopup'] === 'dialog')
+assert.strictEqual(usageButtons.length, 1, 'the usage cell renders exactly one dialog pill')
+assert.ok(!textOf(usageTree).includes('轮 1'), 'the usage cell must not render the activity counts')
+
 // The usage pill label must carry the grand total, not just the main agent.
-const pillButtons = collect(tree, node => node.type === 'button' && node.props['aria-haspopup'] === 'dialog')
-assert.strictEqual(pillButtons.length, 2, 'time pill and usage pill')
-const usageButton = pillButtons[1]
+const usageButton = usageButtons[0]
 assert.ok(textOf(usageButton).includes('94.3K'), `pill must show the grand total, got: ${textOf(usageButton)}`)
 assert.ok(textOf(usageButton).includes('子 3'), 'pill must show the subagent COUNT')
 assert.ok(!textOf(usageButton).includes('7.3K'), 'pill must not carry the subagent aggregate')
@@ -584,8 +624,8 @@ assert.ok(usageButton.props['aria-label'].includes('3 个'), 'aria label keeps t
 
 // Open the usage dialog.
 usageButton.props.onClick()
-tree = rerender(createElement(registered.component, dockProps))
-const dialog = collect(tree, node => node.props?.role === 'dialog')
+usageTree = rerender(createElement(usageCell.component, dockProps))
+const dialog = collect(usageTree, node => node.props?.role === 'dialog')
 assert.strictEqual(dialog.length, 1, 'opening the pill opens exactly one dialog')
 
 const body = textOf(dialog[0])
@@ -613,34 +653,42 @@ for (const fragment of ['1,250', '4,950', '500', '625']) {
 
 // Escape closes it.
 for (const handler of listeners.get('keydown') ?? []) handler({ key: 'Escape' })
-tree = rerender(createElement(registered.component, dockProps))
-assert.strictEqual(collect(tree, node => node.props?.role === 'dialog').length, 0, 'Escape closes the dialog')
+usageTree = rerender(createElement(usageCell.component, dockProps))
+assert.strictEqual(collect(usageTree, node => node.props?.role === 'dialog').length, 0, 'Escape closes the dialog')
 
 /* ------------------------------------------------------------------ *
  * Restricted-context safety: an undeclared service must never throw.
  * ------------------------------------------------------------------ */
 {
-  // No configForms at all: the pill must still mount, in detailed form.
-  const bare = restrictedCtx({ slots, locale })
-  let bareRegistered = null
+  // No configForms at all: both cells must still mount, in detailed form.
+  let bareCells = []
   const bareSlots = {
-    register: (options, component) => { bareRegistered = { options, component }; return component },
-    inject: (_slot, callback) => callback(),
+    register: (options, component) => { bareCells.push({ options, component }); return component },
+    inject: (_slot, callback) => {
+      const output = callback()
+      if (output !== null && typeof output === 'object' && typeof output.next === 'function') {
+        for (let step = output.next(); step.done !== true; step = output.next()) { /* drain */ }
+        return () => {}
+      }
+      return output
+    },
   }
   const bareCtx = restrictedCtx({ slots: bareSlots, locale })
   mod.apply(bareCtx)
-  assert.ok(bareRegistered !== null, 'the plugin must mount without configForms')
-  const bareTree = rerender(createElement(bareRegistered.component, dockProps))
+  assert.strictEqual(bareCells.length, 2, 'the plugin must mount without configForms')
+  const bareUsage = bareCells.find(cell => cell.options.id === 'usage')
+  const bareTree = rerender(createElement(bareUsage.component, dockProps))
   assert.ok(textOf(bareTree).includes('94.3K'), 'the usage pill still reports the grand total')
 
   // configForms present but broken: same requirement.
+  bareCells = []
   const brokenCtx = restrictedCtx({
     slots: bareSlots,
     locale,
     configForms: { get: () => { throw new Error('scope unavailable') } },
   })
   mod.apply(brokenCtx)
-  assert.ok(bareRegistered !== null, 'a broken config scope must not break activation')
+  assert.strictEqual(bareCells.length, 2, 'a broken config scope must not break activation')
 }
 
 /* ------------------------------------------------------------------ *
@@ -651,9 +699,17 @@ assert.strictEqual(collect(tree, node => node.props?.role === 'dialog').length, 
     getSnapshot: () => ({ value: { performanceUsage: 'compact' } }),
     subscribe: () => () => {},
   }
+  const compactCells = []
   const compactSlots = {
-    register: (options, component) => { registered = { options, component }; return component },
-    inject: (_slot, callback) => callback(),
+    register: (options, component) => { compactCells.push({ options, component }); return component },
+    inject: (_slot, callback) => {
+      const output = callback()
+      if (output !== null && typeof output === 'object' && typeof output.next === 'function') {
+        for (let step = output.next(); step.done !== true; step = output.next()) { /* drain */ }
+        return () => {}
+      }
+      return output
+    },
   }
   const compactCtx = restrictedCtx({
     slots: compactSlots,
@@ -661,11 +717,17 @@ assert.strictEqual(collect(tree, node => node.props?.role === 'dialog').length, 
     configForms: { get: () => compactSettings },
   })
   mod.apply(compactCtx)
-  const compactTree = rerender(createElement(registered.component, dockProps))
-  const compactBody = textOf(compactTree)
+  assert.strictEqual(compactCells.length, 2, 'compact mode still registers both cells')
+  const compactActivity = compactCells.find(cell => cell.options.id === 'activity')
+  const compactUsage = compactCells.find(cell => cell.options.id === 'usage')
+  const compactActivityTree = rerender(createElement(compactActivity.component, dockProps))
+  const compactUsageTree = rerender(createElement(compactUsage.component, dockProps))
+  const compactBody = textOf(compactActivityTree) + textOf(compactUsageTree)
   assert.ok(!compactBody.includes('主 Agent'), 'compact mode shows no dialog content')
-  assert.ok(collect(compactTree, node => node.type === 'button').length === 0, 'compact mode has no buttons')
-  assert.ok(compactBody.includes('tok/s'), 'compact mode keeps the speed reading')
+  assert.ok(collect(compactActivityTree, node => node.type === 'button').length === 0, 'compact mode has no buttons')
+  assert.ok(collect(compactUsageTree, node => node.type === 'button').length === 0, 'compact mode has no usage buttons')
+  assert.ok(textOf(compactActivityTree).includes('tok/s'), 'compact mode keeps the speed reading')
+  assert.ok(textOf(compactUsageTree).includes('缓存命中'), 'compact mode keeps the cache-hit reading')
 }
 
 /* ------------------------------------------------------------------ *
@@ -680,4 +742,6 @@ for (const key of Object.keys(en)) {
 
 console.log('smoke test OK')
 console.log(`  modules registered: ${registration.id}`)
-console.log(`  dock cell: ${registered.options.name}#${registered.options.id} (order ${registered.options.order})`)
+for (const cell of registeredCells) {
+  console.log(`  dock cell: ${cell.options.name}#${cell.options.id} (order ${cell.options.order}, priority ${cell.options.priority})`)
+}

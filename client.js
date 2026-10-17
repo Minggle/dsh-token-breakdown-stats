@@ -12,16 +12,26 @@ window.__ModuleLoader__.load({
 // ./entry.js (inlined by build.mjs — edit src/entry.js instead)
 /**
  * Plugin entry: registers the locale dictionaries and displaces the shipped
- * `conversation.composer.dock` `stats` entry.
+ * `conversation.composer.dock` statistics cells.
  *
- * Registration mirrors the shipped `ui-chat` row exactly (same slot, same id,
- * same order) so this plugin REPLACES the built-in pill instead of adding a
- * second one. A dynamically installed plugin receives a lower priority, so
- * this row wins the cell.
+ * DSH splits the composer statistics differently by version:
+ *
+ *  - `0.2.0-rc.2` had ONE cell, id `stats`, holding both pills.
+ *  - `0.2.1-rc.2` registers TWO cells, id `activity` (order 0) and id `usage`
+ *    (order 1), each holding one pill.
+ *
+ * A registration is matched to the shipped row by (slot, id, priority): the
+ * lowest priority for a given id renders, so reusing the shipped id at a
+ * strictly lower priority REPLACES that control. Registering an id the shipped
+ * bundle does not use ADDS a control instead — which is exactly how the old
+ * single `stats` row surfaced as duplicate pills once the dock split in two.
+ *
+ * This entry therefore mirrors the CURRENT shipped rows one for one, so the
+ * plugin replaces both controls whichever way the bundle is composed.
  */
 
 const React = __require('react');
-const { StatsPills } = __require('./stats-pills.js');
+const { ActivityStats, UsageStats } = __require('./stats-pills.js');
 const { zh, en } = __require('./__locale.js');
 const { createElement: h } = React
 
@@ -38,20 +48,31 @@ const NS = 'chat-token-breakdown'
  */
 const inject = ['slots', 'locale']
 
-/** Dock slot and cell this plugin displaces (identical to the shipped row). */
+/** Dock slot the shipped statistics controls live in. */
 const SLOT = 'conversation.composer.dock'
-const CELL_ID = 'stats'
-const CELL_ORDER = 0
 
 /**
- * Priority strictly below the shipped row's 0.
+ * The shipped cells this plugin displaces, in dock order.
+ *
+ * Both ids and both orders mirror the shipped `ui-chat` rows exactly:
+ * `activity` at order 0 (turn/step counts and speed) and `usage` at order 1
+ * (token total and cache hit).
+ */
+const CELLS = [
+  { id: 'activity', order: 0, Component: ActivityStats },
+  { id: 'usage', order: 1, Component: UsageStats },
+]
+
+/**
+ * Priority strictly below the shipped rows' 0.
  *
  * A list slot REJECTS a second registration that reuses an id at the same
  * priority: `register` throws "already has an entry with id … register at a
- * different priority to shadow it (lowest renders)". The shipped `ui-chat` row
- * occupies this cell at priority 0, so a replacement must sit below it. A
- * dynamic plugin is granted a lower priority automatically; this one passes it
- * explicitly so the replacement works whichever way the bundle is composed.
+ * different priority to shadow it (lowest renders)". The shipped `ui-chat` rows
+ * occupy these cells at the default priority 0, so a replacement must sit below
+ * them. A dynamic plugin is granted a lower priority automatically; this one
+ * passes it explicitly so the replacement works whichever way the bundle is
+ * composed.
  */
 const CELL_PRIORITY = -1
 
@@ -113,12 +134,17 @@ function createModeHook(settings) {
 }
 
 /**
- * Mount the replacement stats pill.
+ * Mount the replacement statistics controls.
  *
  * Every step is guarded and logged: a plugin that throws during activation
  * takes the whole client entry down with it, so the real cause must reach the
  * console (and therefore the crash log) instead of surfacing as an opaque
  * "entry did not activate".
+ *
+ * Both cells are registered from ONE `slots.inject` generator, exactly as the
+ * shipped `ui-chat` row does, so they share one disposal scope and cannot
+ * half-mount: if either registration is rejected the whole generator unwinds.
+ *
  * @param ctx - Client root context.
  */
 function apply(ctx) {
@@ -126,13 +152,17 @@ function apply(ctx) {
     ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'token-breakdown-stats: dictionaries')
     const useMode = createModeHook(readSettings(ctx))
 
-    ctx.slots.inject(SLOT, () => ctx.slots.register({
-      name: SLOT,
-      id: CELL_ID,
-      order: CELL_ORDER,
-      priority: CELL_PRIORITY,
-      locale: NS,
-    }, (props) => h(StatsPills, { ...props, useMode })))
+    ctx.slots.inject(SLOT, function* () {
+      for (const { id, order, Component } of CELLS) {
+        yield ctx.slots.register({
+          name: SLOT,
+          id,
+          order,
+          priority: CELL_PRIORITY,
+          locale: NS,
+        }, (props) => h(Component, { ...props, useMode }))
+      }
+    })
   } catch (error) {
     console.error('[token-breakdown-stats] apply failed:', error)
     throw error
@@ -658,17 +688,30 @@ function UsagePill({ facts, t, dialog }) {
 }
 
 /**
- * Composer statistics: the time/activity pill and the subagent-aware usage
- * pill, sharing one exclusive dialog slot.
+ * The `compact` / `detailed` preference as a hook.
  *
  * @param props - slot props plus `useMode` from the plugin entry.
- * @returns the dock row, or null when there is nothing to report.
+ * @returns a hook returning the current mode.
  */
-function StatsPills(props) {
+function useModeOf(props) {
+  return typeof props.useMode === 'function' ? props.useMode : () => 'detailed'
+}
+
+/**
+ * Read the shared chat/session/usage sources both pills need.
+ *
+ * The shipped dock split into two cells (`activity` order 0 and `usage` order
+ * 1), so each of this plugin's cells renders exactly ONE pill and reads only
+ * what that pill needs. Both still share the same underlying snapshots.
+ *
+ * @param props - slot props.
+ * @returns the render inputs for this cell.
+ */
+function useCellInputs(props) {
   const {
     useChat, useProjection, useSessions, useSessionStatus, sessionId, t,
   } = props
-  const useMode = typeof props.useMode === 'function' ? props.useMode : () => 'detailed'
+  const useMode = useModeOf(props)
   const mode = useMode()
 
   // Two different reads of the same chat snapshot, because they answer
@@ -677,15 +720,20 @@ function StatsPills(props) {
   //    folds for its step counts. It deliberately contains NO `turn-tail` rows.
   //  - `nodes.values()` is the keyed store of every materialized Chat Node,
   //    which is where `turn-tail` (and therefore the per-turn `routes`) lives.
-  // Both reads are guarded: an absent field must degrade to "no routes", never
-  // throw during render.
-  const settledNodes = useChat((state) => state.legacy?.nodes ?? NO_NODES)
-  const chatNodes = useChat((state) => state.nodes?.values?.() ?? NO_NODES)
-  const usage = useProjection('tokenUsage')
-  const projected = useProjection('sessionStats')
-  const projections = useSessions((state) => state.projectionsBySession)
-  const summaries = useSessions((state) => state.byId)
-  const statuses = useSessionStatus((value) => value)
+  // Neither read is guaranteed: an absent hook or field must degrade to "no
+  // data", never throw during render.
+  const readNodes = (selector) => (typeof useChat === 'function' ? useChat(selector) : selector({}))
+  const settledNodes = readNodes((state) => state.legacy?.nodes ?? NO_NODES)
+  const chatNodes = readNodes((state) => state.nodes?.values?.() ?? NO_NODES)
+
+  const readProjection = (key) => (typeof useProjection === 'function' ? useProjection(key) : undefined)
+  const usage = readProjection('tokenUsage')
+  const projected = readProjection('sessionStats')
+
+  const readSessions = (selector) => (typeof useSessions === 'function' ? useSessions(selector) : selector({}))
+  const projections = readSessions((state) => state.projectionsBySession)
+  const summaries = readSessions((state) => state.byId)
+  const statuses = typeof useSessionStatus === 'function' ? useSessionStatus((value) => value) : undefined
 
   const stats = useMemo(() => projected ?? deriveStats(settledNodes), [projected, settledNodes])
   const facts = useMemo(() => collectTokenFacts({
@@ -697,9 +745,91 @@ function StatsPills(props) {
     nodes: chatNodes,
   }), [sessionId, projections, summaries, statuses, usage, chatNodes])
 
+  return { mode, stats, facts, t }
+}
+
+/**
+ * The `activity` dock cell: turn/step counts with whole-session speed.
+ *
+ * Replaces the shipped `conversation.composer.dock` `activity` cell (order 0).
+ *
+ * @param props - slot props plus `useMode` from the plugin entry.
+ * @returns the dock cell, or null when there is nothing to report.
+ */
+function ActivityStats(props) {
+  const { mode, stats, t } = useCellInputs(props)
+  const style = h('style', null, CSS)
+  const speed = stats.decodeMs > 0
+    ? t('message.tokensPerSecond', {
+      tps: String(Math.round((stats.decodeTokens / (stats.decodeMs / 1_000)) * 10) / 10),
+    })
+    : null
+
+  if (mode === 'compact') {
+    if (speed === null) return null
+    return h('div', { className: 'tkb-root' }, style,
+      h('span', { className: 'tkb-anchor', 'data-composer-stat': 'activity' },
+        h('span', { className: 'tkb-pill' }, h(GaugeIcon, null), h('span', { className: 'tkb-label' }, speed)),
+      ),
+    )
+  }
+
+  if (stats.steps === 0) return null
+  return h('div', { className: 'tkb-root' }, style,
+    h('span', { 'data-composer-stat': 'activity' },
+      h(TimePill, { stats, t }),
+    ),
+  )
+}
+
+/**
+ * The `usage` dock cell: session token total covering every subagent.
+ *
+ * Replaces the shipped `conversation.composer.dock` `usage` cell (order 1).
+ *
+ * @param props - slot props plus `useMode` from the plugin entry.
+ * @returns the dock cell, or null when there is nothing to report.
+ */
+function UsageStats(props) {
+  const { mode, facts, t } = useCellInputs(props)
+  const style = h('style', null, CSS)
+
+  if (mode === 'compact') {
+    const hit = facts.hasAnyUsage
+      ? cacheHitPercent(facts.total.cacheReadTokens, billedInput(facts.total))
+      : null
+    if (hit === null) return null
+    const hitText = t('stats.cacheHit', { percent: hit })
+    return h('div', { className: 'tkb-root' }, style,
+      h('span', { className: 'tkb-anchor', 'data-composer-stat': 'usage' },
+        h('span', { className: 'tkb-pill' }, h(LayersIcon, null), h('span', { className: 'tkb-label' }, hitText)),
+      ),
+    )
+  }
+
+  if (!facts.hasAnyUsage) return null
+  return h('div', { className: 'tkb-root' }, style,
+    h('span', { 'data-composer-stat': 'usage' },
+      h(UsagePill, { facts, t }),
+    ),
+  )
+}
+
+/**
+ * Backwards-compatible single-cell renderer: both pills in one row.
+ *
+ * Shipped 0.2.0-rc.2 had one `stats` cell holding both pills; 0.2.1-rc.2 split
+ * it into `activity` and `usage`. This component keeps the old combined shape
+ * available for anyone still composing against the older dock, but the bundle
+ * registers the two split cells.
+ *
+ * @param props - slot props plus `useMode` from the plugin entry.
+ * @returns the combined dock row, or null when there is nothing to report.
+ */
+function StatsPills(props) {
+  const { mode, stats, facts, t } = useCellInputs(props)
+  const style = h('style', null, CSS)
   const [openPill, setOpenPill] = useState(null)
-  // One exclusive slot: opening either pill closes the other, exactly like the
-  // shipped row's single `openPill` state.
   const timeDialog = useMemo(() => ({
     open: openPill === 'time',
     setOpen: (next) => { setOpenPill(next ? 'time' : null) },
@@ -708,8 +838,6 @@ function StatsPills(props) {
     open: openPill === 'usage',
     setOpen: (next) => { setOpenPill(next ? 'usage' : null) },
   }), [openPill])
-
-  const style = h('style', null, CSS)
 
   if (mode === 'compact') {
     const speed = stats.decodeMs > 0
@@ -733,18 +861,9 @@ function StatsPills(props) {
   }
 
   if (stats.steps === 0 && !facts.hasAnyUsage) return null
-
   return h('div', { className: 'tkb-root' }, style,
-    stats.steps > 0 && h(TimePill, {
-      stats,
-      t,
-      dialog: timeDialog,
-    }),
-    h(UsagePill, {
-      facts,
-      t,
-      dialog: usageDialog,
-    }),
+    stats.steps > 0 && h(TimePill, { stats, t, dialog: timeDialog }),
+    h(UsagePill, { facts, t, dialog: usageDialog }),
   )
 }
 
@@ -752,6 +871,8 @@ const __default__ = StatsPills
 
 module.exports = {
   "default": __default__,
+  "ActivityStats": ActivityStats,
+  "UsageStats": UsageStats,
   "StatsPills": StatsPills,
 };
 
@@ -1156,6 +1277,10 @@ module.exports = {
 // Generated from locale/*.json by build.mjs — do not edit.
 module.exports = {
   "en": {
+    "meta": {
+      "title": "Token Breakdown Stats",
+      "description": "Replaces the composer-dock stats pill so the session token total covers the main agent plus every subagent it called, with a click-open breakdown by bucket, by subagent, and by model."
+    },
     "stats.counts": "{turns} turns {steps} steps",
     "stats.cacheHit": "Cache hit {percent}%",
     "stats.dialog.title": "Session statistics",
@@ -1190,6 +1315,10 @@ module.exports = {
     "tokenBreakdown.splitSubagents": "Subagents {percent}%"
   },
   "zh": {
+    "meta": {
+      "title": "Token 用量分项统计",
+      "description": "替换输入框下方的统计胶囊，让会话 token 总量覆盖主 Agent 及其调用的全部子 Agent，点击弹出按计费桶、按子 Agent、按模型的分项统计。"
+    },
     "stats.counts": "{turns} 轮 {steps} 步",
     "stats.cacheHit": "缓存命中 {percent}%",
     "stats.dialog.title": "会话统计",

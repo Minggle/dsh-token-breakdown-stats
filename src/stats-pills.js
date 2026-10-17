@@ -512,17 +512,30 @@ function UsagePill({ facts, t, dialog }) {
 }
 
 /**
- * Composer statistics: the time/activity pill and the subagent-aware usage
- * pill, sharing one exclusive dialog slot.
+ * The `compact` / `detailed` preference as a hook.
  *
  * @param props - slot props plus `useMode` from the plugin entry.
- * @returns the dock row, or null when there is nothing to report.
+ * @returns a hook returning the current mode.
  */
-export function StatsPills(props) {
+function useModeOf(props) {
+  return typeof props.useMode === 'function' ? props.useMode : () => 'detailed'
+}
+
+/**
+ * Read the shared chat/session/usage sources both pills need.
+ *
+ * The shipped dock split into two cells (`activity` order 0 and `usage` order
+ * 1), so each of this plugin's cells renders exactly ONE pill and reads only
+ * what that pill needs. Both still share the same underlying snapshots.
+ *
+ * @param props - slot props.
+ * @returns the render inputs for this cell.
+ */
+function useCellInputs(props) {
   const {
     useChat, useProjection, useSessions, useSessionStatus, sessionId, t,
   } = props
-  const useMode = typeof props.useMode === 'function' ? props.useMode : () => 'detailed'
+  const useMode = useModeOf(props)
   const mode = useMode()
 
   // Two different reads of the same chat snapshot, because they answer
@@ -531,15 +544,20 @@ export function StatsPills(props) {
   //    folds for its step counts. It deliberately contains NO `turn-tail` rows.
   //  - `nodes.values()` is the keyed store of every materialized Chat Node,
   //    which is where `turn-tail` (and therefore the per-turn `routes`) lives.
-  // Both reads are guarded: an absent field must degrade to "no routes", never
-  // throw during render.
-  const settledNodes = useChat((state) => state.legacy?.nodes ?? NO_NODES)
-  const chatNodes = useChat((state) => state.nodes?.values?.() ?? NO_NODES)
-  const usage = useProjection('tokenUsage')
-  const projected = useProjection('sessionStats')
-  const projections = useSessions((state) => state.projectionsBySession)
-  const summaries = useSessions((state) => state.byId)
-  const statuses = useSessionStatus((value) => value)
+  // Neither read is guaranteed: an absent hook or field must degrade to "no
+  // data", never throw during render.
+  const readNodes = (selector) => (typeof useChat === 'function' ? useChat(selector) : selector({}))
+  const settledNodes = readNodes((state) => state.legacy?.nodes ?? NO_NODES)
+  const chatNodes = readNodes((state) => state.nodes?.values?.() ?? NO_NODES)
+
+  const readProjection = (key) => (typeof useProjection === 'function' ? useProjection(key) : undefined)
+  const usage = readProjection('tokenUsage')
+  const projected = readProjection('sessionStats')
+
+  const readSessions = (selector) => (typeof useSessions === 'function' ? useSessions(selector) : selector({}))
+  const projections = readSessions((state) => state.projectionsBySession)
+  const summaries = readSessions((state) => state.byId)
+  const statuses = typeof useSessionStatus === 'function' ? useSessionStatus((value) => value) : undefined
 
   const stats = useMemo(() => projected ?? deriveStats(settledNodes), [projected, settledNodes])
   const facts = useMemo(() => collectTokenFacts({
@@ -551,9 +569,91 @@ export function StatsPills(props) {
     nodes: chatNodes,
   }), [sessionId, projections, summaries, statuses, usage, chatNodes])
 
+  return { mode, stats, facts, t }
+}
+
+/**
+ * The `activity` dock cell: turn/step counts with whole-session speed.
+ *
+ * Replaces the shipped `conversation.composer.dock` `activity` cell (order 0).
+ *
+ * @param props - slot props plus `useMode` from the plugin entry.
+ * @returns the dock cell, or null when there is nothing to report.
+ */
+export function ActivityStats(props) {
+  const { mode, stats, t } = useCellInputs(props)
+  const style = h('style', null, CSS)
+  const speed = stats.decodeMs > 0
+    ? t('message.tokensPerSecond', {
+      tps: String(Math.round((stats.decodeTokens / (stats.decodeMs / 1_000)) * 10) / 10),
+    })
+    : null
+
+  if (mode === 'compact') {
+    if (speed === null) return null
+    return h('div', { className: 'tkb-root' }, style,
+      h('span', { className: 'tkb-anchor', 'data-composer-stat': 'activity' },
+        h('span', { className: 'tkb-pill' }, h(GaugeIcon, null), h('span', { className: 'tkb-label' }, speed)),
+      ),
+    )
+  }
+
+  if (stats.steps === 0) return null
+  return h('div', { className: 'tkb-root' }, style,
+    h('span', { 'data-composer-stat': 'activity' },
+      h(TimePill, { stats, t }),
+    ),
+  )
+}
+
+/**
+ * The `usage` dock cell: session token total covering every subagent.
+ *
+ * Replaces the shipped `conversation.composer.dock` `usage` cell (order 1).
+ *
+ * @param props - slot props plus `useMode` from the plugin entry.
+ * @returns the dock cell, or null when there is nothing to report.
+ */
+export function UsageStats(props) {
+  const { mode, facts, t } = useCellInputs(props)
+  const style = h('style', null, CSS)
+
+  if (mode === 'compact') {
+    const hit = facts.hasAnyUsage
+      ? cacheHitPercent(facts.total.cacheReadTokens, billedInput(facts.total))
+      : null
+    if (hit === null) return null
+    const hitText = t('stats.cacheHit', { percent: hit })
+    return h('div', { className: 'tkb-root' }, style,
+      h('span', { className: 'tkb-anchor', 'data-composer-stat': 'usage' },
+        h('span', { className: 'tkb-pill' }, h(LayersIcon, null), h('span', { className: 'tkb-label' }, hitText)),
+      ),
+    )
+  }
+
+  if (!facts.hasAnyUsage) return null
+  return h('div', { className: 'tkb-root' }, style,
+    h('span', { 'data-composer-stat': 'usage' },
+      h(UsagePill, { facts, t }),
+    ),
+  )
+}
+
+/**
+ * Backwards-compatible single-cell renderer: both pills in one row.
+ *
+ * Shipped 0.2.0-rc.2 had one `stats` cell holding both pills; 0.2.1-rc.2 split
+ * it into `activity` and `usage`. This component keeps the old combined shape
+ * available for anyone still composing against the older dock, but the bundle
+ * registers the two split cells.
+ *
+ * @param props - slot props plus `useMode` from the plugin entry.
+ * @returns the combined dock row, or null when there is nothing to report.
+ */
+export function StatsPills(props) {
+  const { mode, stats, facts, t } = useCellInputs(props)
+  const style = h('style', null, CSS)
   const [openPill, setOpenPill] = useState(null)
-  // One exclusive slot: opening either pill closes the other, exactly like the
-  // shipped row's single `openPill` state.
   const timeDialog = useMemo(() => ({
     open: openPill === 'time',
     setOpen: (next) => { setOpenPill(next ? 'time' : null) },
@@ -562,8 +662,6 @@ export function StatsPills(props) {
     open: openPill === 'usage',
     setOpen: (next) => { setOpenPill(next ? 'usage' : null) },
   }), [openPill])
-
-  const style = h('style', null, CSS)
 
   if (mode === 'compact') {
     const speed = stats.decodeMs > 0
@@ -587,18 +685,9 @@ export function StatsPills(props) {
   }
 
   if (stats.steps === 0 && !facts.hasAnyUsage) return null
-
   return h('div', { className: 'tkb-root' }, style,
-    stats.steps > 0 && h(TimePill, {
-      stats,
-      t,
-      dialog: timeDialog,
-    }),
-    h(UsagePill, {
-      facts,
-      t,
-      dialog: usageDialog,
-    }),
+    stats.steps > 0 && h(TimePill, { stats, t, dialog: timeDialog }),
+    h(UsagePill, { facts, t, dialog: usageDialog }),
   )
 }
 

@@ -1,6 +1,6 @@
-{
+﻿{
   "name": "@local/token-breakdown-stats",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "Session token usage with subagent rollup: replaces the composer-dock stats pill so the bottom total covers the main agent plus every subagent it called, and the click-open dialog itemizes usage by bucket, by subagent, and by model.",
