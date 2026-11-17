@@ -55,6 +55,7 @@ mirrors whichever rows the shipped `ui-chat` bundle registers:
 |---|---|---|
 | `0.2.0-rc.2` | one cell, id `stats`, order 0 | (single-cell form, `StatsPills`) |
 | `0.2.1-rc.2` | `activity` order 0 **and** `usage` order 1 | `activity` order 0 **and** `usage` order 1 |
+| `0.2.2-rc.3` | `activity` order 0 **and** `usage` order 1 (unchanged) | `activity` order 0 **and** `usage` order 1 |
 
 A list slot matches a registration to a shipped row by **id + priority**: the
 lowest priority for a given id renders, so reusing the shipped id at a strictly
@@ -161,6 +162,10 @@ mode, and locale parity.
   `conversation.composer.dock` rows `activity` and `usage`). On
   `0.2.0-rc.2` the dock still had the single `stats` cell, which this plugin
   no longer targets.
+- Verified against the shipped `0.2.2-rc.3` bundles: the dock rows, the
+  `tokenUsage` / `subagentCatalog` / `subagent` / `sessionStats` projections,
+  the `turn-tail` usage routes, and the borrowed `ui-chat` locale strings are
+  all unchanged, so no adaptation was required for that release.
 - A desktop or web profile; the Web GUI renders the pills.
 
 ## Install incident (2026-10-15)

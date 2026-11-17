@@ -48,6 +48,7 @@ Agent 时，子 Agent 消耗的 token 在会话底部完全看不到。
 |---|---|---|
 | `0.2.0-rc.2` | 单个单元，id `stats`，order 0 | （单单元形态 `StatsPills`） |
 | `0.2.1-rc.2` | `activity` order 0 **与** `usage` order 1 | `activity` order 0 **与** `usage` order 1 |
+| `0.2.2-rc.3` | `activity` order 0 **与** `usage` order 1（未变） | `activity` order 0 **与** `usage` order 1 |
 
 list slot 按 **id + priority** 把注册匹配到原生行：同 id 下 priority 最低的那条渲染，因此用
 原生 id 配一个严格更低的 `priority` 就是**替换**该控件；而注册一个原生包并不使用的 id 则是
@@ -138,6 +139,9 @@ node src/smoke.test.cjs
   `SessionSummary.projectionValues`，并匹配拆分后的 `conversation.composer.dock`
   行 `activity` 与 `usage`）。`0.2.0-rc.2` 的 dock 还是单个 `stats` 单元，本插件
   已不再针对它。
+- 已对照出厂 `0.2.2-rc.3` 包核验：dock 行、`tokenUsage` / `subagentCatalog` /
+  `subagent` / `sessionStats` 投影、`turn-tail` 用量 routes，以及借用的
+  `ui-chat` 文案均未变化，该版本无需适配改动。
 - desktop 或 web profile；Web GUI 渲染胶囊。
 
 ## 安装事故记录（2026-10-15）

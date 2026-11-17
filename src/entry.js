@@ -7,6 +7,8 @@
  *  - `0.2.0-rc.2` had ONE cell, id `stats`, holding both pills.
  *  - `0.2.1-rc.2` registers TWO cells, id `activity` (order 0) and id `usage`
  *    (order 1), each holding one pill.
+ *  - `0.2.2-rc.3` keeps that split unchanged (verified against the shipped
+ *    `ui-chat` bundle), so both cells still mirror it one for one.
  *
  * A registration is matched to the shipped row by (slot, id, priority): the
  * lowest priority for a given id renders, so reusing the shipped id at a
