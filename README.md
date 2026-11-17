@@ -109,24 +109,29 @@ readings without dialogs.
 
 ## Install
 
-The bundle is a plain directory — no build step is required, because
-`client.js` is committed. Install it into a profile from a local clone:
+Install the release tarball straight into a profile — no clone or build
+step is needed, because the packed bundle carries the built `client.js`:
 
 ```powershell
-git clone https://github.com/Minggle/dsh-token-breakdown-stats.git
+dsh plugin --profile desktop add https://github.com/Minggle/dsh-token-breakdown-stats/releases/download/v1.0.3/token-breakdown-stats-1.0.3.tgz
 ```
 
-Then, in a dsh session, install the bundle with `plugin_manager`:
+From inside a dsh session, the same install goes through the
+`plugin_manager` tool:
 
 ```
 plugin_manager  action: install_bundle
-               target: <absolute path to the cloned directory>
+               target: https://github.com/Minggle/dsh-token-breakdown-stats/releases/download/v1.0.3/token-breakdown-stats-1.0.3.tgz
 ```
 
-The inserted row id is `token-breakdown-stats`. Restart the app (or let the
-live patch reload apply it) and the pill in the composer dock is replaced.
+Replace `desktop` with your profile name and `v1.0.2` with the release you
+want; every release attaches its own `<name>-<version>.tgz` asset. The
+inserted row id is `token-breakdown-stats`. Restart the app (or let the
+live patch reload apply it) and the pill in the composer dock is
+replaced.
 
-To rebuild `client.js` from `src/` after editing the sources:
+For local development, clone the repository and install the directory the
+same way. To rebuild `client.js` from `src/` after editing the sources:
 
 ```powershell
 node build.mjs

@@ -88,23 +88,26 @@ list slot 按 **id + priority** 把注册匹配到原生行：同 id 下 priorit
 
 ## 安装
 
-bundle 就是一个普通目录，`client.js` 已提交，无需构建。先从本地克隆安装：
+直接把 release 资产里的 tgz 装进 profile——无需克隆、无需构建，打包好的
+bundle 自带已生成的 `client.js`：
 
 ```powershell
-git clone https://github.com/Minggle/dsh-token-breakdown-stats.git
+dsh plugin --profile desktop add https://github.com/Minggle/dsh-token-breakdown-stats/releases/download/v1.0.3/token-breakdown-stats-1.0.3.tgz
 ```
 
-然后在 dsh 会话里用 `plugin_manager` 把 bundle 装进 profile：
+在 dsh 会话里，同样的安装走 `plugin_manager` 工具：
 
 ```
 plugin_manager  action: install_bundle
-               target: <克隆目录的绝对路径>
+               target: https://github.com/Minggle/dsh-token-breakdown-stats/releases/download/v1.0.3/token-breakdown-stats-1.0.3.tgz
 ```
 
-补丁行 id 为 `token-breakdown-stats`。重启应用（或等 live patch 重载生效），输入框下方
+把 `desktop` 换成你的 profile 名、`v1.0.2` 换成目标 release 即可；每个
+release 都附带自己的 `<name>-<version>.tgz` 资产。补丁行 id 为
+`token-breakdown-stats`。重启应用（或等 live patch 重载生效），输入框下方
 的胶囊即被替换。
 
-改完源码后重新生成 `client.js`：
+本地开发则克隆仓库、按同样方式安装目录。改完源码后重新生成 `client.js`：
 
 ```powershell
 node build.mjs
