@@ -147,47 +147,6 @@ node src/smoke.test.cjs
   `ui-chat` 文案均未变化，该版本无需适配改动。
 - desktop 或 web profile；Web GUI 渲染胶囊。
 
-## 安装事故记录（2026-10-15）
-
-早期版本曾让桌面版 web boot 失败：`1 entry did not activate:
-@deepseek-ai/dsh-client-ui-chat: failed`。当时移除了 bundle，并从应用自己写
-的备份（`cordis.patch.yml.bak-*`）恢复了 profile，用户数据无损。
-
-两个根因记录在此，因为它们都很容易再次引入：
-
-1. **list slot 拒绝同 id 同 priority 的第二次注册。** 原生 `ui-chat` 行以
-   priority 0 占着 `conversation.composer.dock` 的 id `stats`，替换者必须传
-   严格更低的 `priority`（本插件用 `-1`）。slot 的 `register` 会抛
-   `already has an entry with id "stats" at priority 0 … register at a
-   different priority to shadow it (lowest renders)`；而插件的 inject 回调
-   是在 dock 属主的 fiber 里执行的，所以失败记在属主头上而不是插件头上。
-2. **受限 Client 上下文访问未声明 service 会抛错。** 未在 entry 的 `inject`
-   里声明 `configForms` 就读 `ctx.configForms`，会抛
-   `cannot get property "configForms" without inject`。现在插件只声明
-   `['slots', 'locale']`，其余一律防御式读取。
-
-冒烟测试里有两个 mock 分别复现这两种失败模式，所以回归会先让测试红，而不是
-让 boot 崩。
-
-## 胶囊重复回归（DSH 0.2.1-rc.2，2026-10-17）
-
-升级到 DSH `0.2.1-rc.2` 后，每一项统计都**显示了两遍**。原因是 dock 形状变了，而不是
-slot 规则变了：`ui-chat` 把原来的单个 `stats` 单元拆成了 `activity`（order 0）和
-`usage`（order 1）。插件当时仍只注册 `stats`，而它已经匹配不到任何原生行 —— 于是变成
-**新增**第三个控件，而不是替换，两个原生胶囊就在下方一起渲染了。
-
-现在插件一一对应地注册 `activity` 与 `usage`，每个单元只渲染一个胶囊
-（`ActivityStats` / `UsageStats`），同时 `entry.js` 仍把它们放在同一个
-`slots.inject` generator 里，保证一起挂载、一起卸载。
-
-两道防线防止重演：
-
-- 冒烟测试改为模拟**拆分后**的 dock，因此注册一个 dock 并不使用的 id 会直接让测试失败，
-  而不是悄悄多出一个控件；同时断言每个单元只渲染一个胶囊（两个单元都渲染两个胶囊会让
-  整块内容重复一遍）。
-- 一个 `0.2.1-rc.2` fixture 把两套注册都喂给**真实的**原生 `SlotCore`，断言修复后渲染
-  2 个控件、修复前渲染 3 个。
-
 ## 许可证
 
 [MIT](LICENSE)

@@ -173,55 +173,6 @@ mode, and locale parity.
   all unchanged, so no adaptation was required for that release.
 - A desktop or web profile; the Web GUI renders the pills.
 
-## Install incident (2026-10-15)
-
-An early build of this plugin made the desktop app fail web boot with
-`1 entry did not activate: @deepseek-ai/dsh-client-ui-chat: failed`. The
-bundle was removed and the profile restored from the backup the app itself
-wrote (`cordis.patch.yml.bak-*`), so no user data was lost.
-
-The root causes are recorded here because both are easy to reintroduce:
-
-1. **A list slot rejects a same-id, same-priority registration.** The shipped
-   `ui-chat` row occupies `conversation.composer.dock` id `stats` at priority
-   0; a replacement must pass a strictly lower `priority` (this plugin uses
-   `-1`). The slot's `register` throws
-   `already has an entry with id "stats" at priority 0 … register at a
-   different priority to shadow it (lowest renders)`, and because the plugin's
-   inject callback runs inside the dock owner's fiber, the failure is reported
-   against that owner rather than the plugin.
-2. **A restricted Client context throws on an undeclared service.** Reading
-   `ctx.configForms` without declaring `configForms` in the entry's `inject`
-   raises `cannot get property "configForms" without inject`. The plugin now
-   declares only `['slots', 'locale']` and reads everything else defensively.
-
-Two smoke-test mocks reproduce both failure modes so a regression fails the
-test instead of a boot: the context throws on undeclared service access, and
-the slot service rejects a duplicate cell at the same priority.
-
-## Duplicate-pill regression (DSH 0.2.1-rc.2, 2026-10-17)
-
-Upgrading to DSH `0.2.1-rc.2` made every statistic appear **twice**. The cause
-was a dock re-shape, not a slot-rule change: `ui-chat` split its single
-`stats` cell into `activity` (order 0) and `usage` (order 1). The plugin still
-registered only `stats`, which then matched no shipped row — so it **added** a
-third control instead of replacing one, and the two shipped pills rendered
-underneath it.
-
-The plugin now registers `activity` and `usage` one-for-one, each rendering a
-single pill (`ActivityStats` / `UsageStats`), while `entry.js` keeps them in one
-`slots.inject` generator so they mount and unmount together.
-
-Two guards keep it from recurring:
-
-- The smoke test models the **split** dock, so registering an id the dock does
-  not use fails the test instead of silently adding a control, and it asserts
-  each cell renders exactly one pill (rendering both from both cells would
-  duplicate the whole block).
-- A `0.2.1-rc.2` fixture replays both registration sets through the **real**
-  shipped `SlotCore` and asserts 2 rendered controls after the fix versus 3
-  before it.
-
 ## License
 
 [MIT](LICENSE)
